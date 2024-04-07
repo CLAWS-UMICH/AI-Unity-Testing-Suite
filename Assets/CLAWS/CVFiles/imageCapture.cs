@@ -12,6 +12,7 @@ using System.Drawing;
 using UnityEngine.InputSystem.HID;
 using UnityEngine.UIElements;
 using Unity.VisualScripting;
+using System.Net;
 
 
 public class imageCapture : MonoBehaviour
@@ -44,6 +45,10 @@ public class imageCapture : MonoBehaviour
     public GameObject ToolTipPivot;
     public TMP_Text ToolTipLabel;
 
+    public GameObject TestLineAnchor;
+    public GameObject TestLinePivot;
+    bool showline = false;
+
     Queue<RayCastAction> queued_actions = new Queue<RayCastAction>();
 
     public class RayCastAction
@@ -56,11 +61,27 @@ public class imageCapture : MonoBehaviour
         public string description;
     }   
 
+    public void ToggleLine()
+    {
+        if (showline)
+            showline = false;
+        else
+            showline = true;
+    }
+
     public void Start()
     {
         // Create a temporary camera object
         tempCamera.fieldOfView = Camera.main.fieldOfView;
         tempCamera.aspect = Camera.main.aspect;
+
+        // Load saved url value if it exists:
+        string loadedVal = LoadStringValue();
+        if (loadedVal !=  "")
+            webSocketUrl = loadedVal;
+
+        Debug.Log(loadedVal);
+        Debug.Log(webSocketUrl);
 
         // Some formatting
         webSocketUrl = webSocketUrl + IPString;
@@ -118,6 +139,11 @@ public class imageCapture : MonoBehaviour
             else if (action.type == "geosample_place_label")
             {
                 PlaceLabel(action);
+            }
+            else if (action.type == "calibration_place_sphere")
+            {
+                Debug.Log("Placing ballz");
+                PlaceSphere(action);
             }
         }
     }
@@ -192,16 +218,37 @@ public class imageCapture : MonoBehaviour
     void PlaceLabel(RayCastAction action)
     {
         Vector3 hit = performRaycast(action.keypoints[0].x, action.keypoints[0].y);
+        Debug.Log(hit);
         if (hit != Vector3.zero)
         {
             ToolTipAnchor.transform.position = hit;
             ToolTipLabel.text = action.description;
             ToolTipPivot.transform.position = hit + Vector3.up;
             raycast_textbox.text = "Placed tooltip";
+
+            if (showline)
+            {
+                TestLineAnchor.transform.position = hit;
+                TestLinePivot.transform.position = tempCamera.transform.position;
+            }
         }
         else
         {
             raycast_textbox.text = "Failed to place tooltip";
+        }
+    }
+
+    void PlaceSphere(RayCastAction action)
+    {
+        Vector3 hit = performRaycast(action.keypoints[0].x, action.keypoints[0].y);
+        if (hit != Vector3.zero)
+        {
+            sphere1.transform.position = hit;
+            raycast_textbox.text = "Placed sphere1";            
+        }
+        else
+        {
+            raycast_textbox.text = "Failed to place ball";
         }
     }
 
@@ -217,6 +264,11 @@ public class imageCapture : MonoBehaviour
         {
             Debug.Log("Starting Geosample thing");
             processGeosampleWebsocket(jsonData);
+        }
+        else if (jsonData.StartsWith("calibrate"))
+        {
+            Debug.Log("Starting Calibration");
+            processCalibration(jsonData);
         }
         else
         {
@@ -258,6 +310,23 @@ public class imageCapture : MonoBehaviour
             keypoints = point,
             description = components[4]
         });        
+    }
+    private void processCalibration(string message)
+    {
+        // calibration:x,y,z:a,b,c,d:x,y
+        string[] components = message.Split(":");
+        Vector3 head_pos = parseVector(components[1]);
+        Quaternion head_rot = parseQuaternion(components[2]);
+        Vector3[] point = parse_points(components[3]);        
+        queued_actions.Enqueue(new RayCastAction
+        {
+            action = "points_sphere",
+            type = "calibration_place_sphere",
+            position = head_pos,
+            rotation = head_rot,
+            keypoints = point,
+            description = "ballz"
+        });
     }
 
     private void OnWebSocketMessage(object sender, MessageEventArgs e)
@@ -303,7 +372,7 @@ public class imageCapture : MonoBehaviour
             Debug.Log("Taking a picture");
             photoCaptureObject.TakePhotoAsync((result, frame) => OnCapturedPhotoToWebSocket(result, frame, type));            
         }
-    }    
+    }
 
     void StartPhotoCapture()
     {
@@ -406,7 +475,21 @@ public class imageCapture : MonoBehaviour
     {       
         webSocketUrl = "ws://" + IPString;
         ip_textbox.SetText(webSocketUrl);
+        SaveStringValue(webSocketUrl);
     }
+
+    public void SaveStringValue(string value)
+    {
+        PlayerPrefs.SetString(webSocketUrl, value);
+        PlayerPrefs.Save();
+    }
+
+    // Function to load the string value
+    public string LoadStringValue()
+    {
+        return PlayerPrefs.GetString(webSocketUrl, "");
+    }
+
     public static Vector3 CalculateAverage(Vector3[] vectorArray)
     {
         // Initialize variables to store the sum of each component
@@ -466,8 +549,7 @@ public class imageCapture : MonoBehaviour
         string[] cornerString = input.Split("$");        
         Vector3[] corners = new Vector3[4];
         for (int i = 0; i < cornerString.Length; i++)
-        {
-            Debug.Log(cornerString[i]);
+        {            
             if (cornerString[i].Length > 0)
             {
                 string[] components = cornerString[i].Split(",");
